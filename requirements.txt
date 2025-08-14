@@ -1,0 +1,10 @@
+Flask
+torch
+torchvision
+opencv-python
+pillow
+ultralytics>=8.0.0
+mediapipe
+numpy
+pandas
+matplotlib
