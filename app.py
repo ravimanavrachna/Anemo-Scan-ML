@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import base64, os, tempfile
 from datetime import datetime
 import cv2
@@ -14,6 +15,7 @@ import mediapipe as mp
 # App & Device
 # =========================
 app = Flask(__name__)
+CORS(app, origins=["https://anemoscan.ai.backend.healthinnovations.in"], supports_credentials=True, allow_headers=["Content-Type", "Authorization"], methods=["GET", "POST", "OPTIONS"])
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # =========================

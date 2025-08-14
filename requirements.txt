@@ -8,3 +8,4 @@ mediapipe
 numpy
 pandas
 matplotlib
+flask_cors
