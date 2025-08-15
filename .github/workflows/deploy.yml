@@ -22,11 +22,14 @@ jobs:
             git pull origin main
 
             echo "🐍 Activating Python environment..."
-            source venv/bin/activate || python3 -m venv venv && source venv/bin/activate
+            if [ ! -d "venv" ]; then
+              python -m venv venv
+            fi
+            source venv/bin/activate
             pip install --upgrade pip
             pip install -r requirements.txt
 
             echo "🚀 Restarting ML backend with PM2..."
-            pm2 restart anemo-ml || pm2 start gunicorn --name anemo-ml -- \
+            pm2 restart anemo-ml || pm2 start venv/bin/gunicorn --name anemo-ml -- \
               -b 0.0.0.0:8000 app:app --workers 4 --timeout 300
             pm2 save
