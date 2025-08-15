@@ -315,7 +315,7 @@ def process_nail(image_path: str, save_dir: str):
 # =========================
 # Flask Endpoint
 # =========================
-@app.route('/anemoscan_healthinnovations', methods=['POST'])
+@app.route('/predict_anemia', methods=['POST'])
 def predict_anemia():
     """
     Expects form-data files:

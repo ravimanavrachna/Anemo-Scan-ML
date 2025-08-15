@@ -1,0 +1,23 @@
+# Environment files
+.env
+.venv/
+env/
+venv/
+ENV/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Data files
+*.csv
+*.tsv
+*.dat
+*.npy
+*.npz
+*.xls
+*.xlsx
+*.db
+*.sqlite

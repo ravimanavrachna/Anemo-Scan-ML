@@ -9,3 +9,4 @@ numpy
 pandas
 matplotlib
 flask_cors
+protobuf<3.21
