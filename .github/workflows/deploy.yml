@@ -22,7 +22,7 @@ jobs:
             git pull origin main
 
             echo "🐍 Setting up Python environment..."
-            python3 -m venv venv
+            python -m venv venv
             source venv/bin/activate
             pip install --upgrade pip
             pip install -r requirements.txt
