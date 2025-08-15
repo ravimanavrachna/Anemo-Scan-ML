@@ -21,12 +21,12 @@ jobs:
             git reset --hard
             git pull origin main
 
-            echo "🐍 Setting up Python environment..."
-            python -m venv venv
-            source venv/bin/activate
+            echo "🐍 Activating Python environment..."
+            source venv/bin/activate || python3 -m venv venv && source venv/bin/activate
             pip install --upgrade pip
             pip install -r requirements.txt
 
-            echo "🚀 Restarting ML backend..."
-            pkill -f "gunicorn" || true
-            nohup gunicorn app:app --bind 0.0.0.0:8000 --workers 4 --timeout 300 > gunicorn.log 2>&1 &
+            echo "🚀 Restarting ML backend with PM2..."
+            pm2 restart anemo-ml || pm2 start gunicorn --name anemo-ml -- \
+              -b 0.0.0.0:8000 app:app --workers 4 --timeout 300
+            pm2 save
