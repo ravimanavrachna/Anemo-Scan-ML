@@ -1,4 +1,4 @@
-name: Deploy Frontend
+name: Deploy AI ML Backend
 
 on:
   push:
@@ -17,18 +17,16 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
             cd /root/Anemo-Scan-ML
-            ls
+            echo "📂 Pulling latest code..."
+            git reset --hard
             git pull origin main
-            python -m venv venv
-            venv/Scripts/activate
+
+            echo "🐍 Setting up Python environment..."
+            python3 -m venv venv
+            source venv/bin/activate
+            pip install --upgrade pip
             pip install -r requirements.txt
-            python app.py
 
-
-
-
-
-            npm install
-            npm run build
-            sudo nginx -t
-            sudo systemctl reload nginx
+            echo "🚀 Restarting ML backend..."
+            pkill -f "gunicorn" || true
+            nohup gunicorn app:app --bind 0.0.0.0:8000 --workers 4 --timeout 300 > gunicorn.log 2>&1 &
