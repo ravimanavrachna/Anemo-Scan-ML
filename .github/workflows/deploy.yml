@@ -18,7 +18,6 @@ jobs:
           script: |
             cd /root/Anemo-Scan-ML
             echo "📂 Pulling latest code..."
-            git reset --hard
             git pull origin main
 
             echo "🐍 Activating Python environment..."
@@ -31,5 +30,5 @@ jobs:
 
             echo "🚀 Restarting ML backend with PM2..."
             pm2 restart anemo-ml || pm2 start venv/bin/gunicorn --name anemo-ml -- \
-              -b 0.0.0.0:8000 app:app --workers 4 --timeout 300
+              -b 0.0.0.0:5000 app:app --workers 4 --timeout 300
             pm2 save
