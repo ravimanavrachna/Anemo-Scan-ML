@@ -10,12 +10,15 @@ from torchvision import transforms, models
 from PIL import Image
 from ultralytics import YOLO
 import mediapipe as mp
+import os
+from torchvision.models import mobilenet_v2
+from ultralytics import YOLO
 
 # =========================
 # App & Device
 # =========================
 app = Flask(__name__)
-CORS(app, origins=["https://anemoscan.ai.backend.healthinnovations.in"], supports_credentials=True, allow_headers=["Content-Type", "Authorization"], methods=["GET", "POST", "OPTIONS"])
+CORS(app, origins=["https://anemoscan.healthinnovations.in"], supports_credentials=True, allow_headers=["Content-Type", "Authorization"], methods=["GET", "POST", "OPTIONS"])
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # =========================
@@ -47,7 +50,7 @@ def majority_label(labels, positive="anemia", negative="non-anemia"):
 # 1) EYE: YOLO (seg or bbox) + MobileNetV2 (binary)
 # =========================
 EYE_YOLO_MODEL_PATH = "./models/best_10aug2025_eye.pt"     # segmentation or bbox
-EYE_CLASSIFIER_PATH = "./models/MobileNetV2_eye.pth"
+EYE_CLASSIFIER_PATH = "./models/mobilenetv2_conjunctiva.pth"
 EYE_CLASS_TARGET = 0  # conjunctiva class id
 
 yolo_eye_model = YOLO(EYE_YOLO_MODEL_PATH)
@@ -145,7 +148,7 @@ def process_eye(image_path: str, save_dir: str):
 # =========================
 # 2) PALM: MediaPipe crop + MobileNetV2 (binary)
 # =========================
-PALM_MODEL_PATH = "./models/mobilenet_model_palm.pth"
+PALM_MODEL_PATH = "./models/mobilenetv2_finetuned_palm.pth"
 
 palm_model = models.mobilenet_v2(weights=None)
 palm_model.classifier[1] = nn.Linear(palm_model.last_channel, 2)
@@ -212,99 +215,112 @@ def process_palm(image_path: str, save_dir: str):
 # =========================
 # 3) NAILS: YOLO (bbox) + SimpleCNN (binary), per-nail details (up to 10)
 # =========================
-NAIL_YOLO_PATH = "./models/yolov8_nail_best.pt"
-NAIL_ANEMIA_MODEL_PATH = "./models/anemia_cnn_model2_nail.pth"
 
+
+# ============================================================
+# CONFIG
+# ============================================================
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+NAIL_YOLO_PATH = "./models/yolov8_nail_best.pt"
+NAIL_MODEL_PATH = "./models/mobilenetv2_nailbeds.pth"
+CLASS_NAMES = ["anemia", "non-anemia"]
+
+# ============================================================
+# LOAD MODELS
+# ============================================================
 yolo_nail_model = YOLO(NAIL_YOLO_PATH)
 
-class SimpleCNN(nn.Module):
-    def __init__(self, num_classes=2):
-        super(SimpleCNN, self).__init__()
-        self.features = nn.Sequential(
-            nn.Conv2d(3, 16, 3, 1, 1),
-            nn.ReLU(),
-            nn.MaxPool2d(2, 2),
-            nn.Conv2d(16, 32, 3, 1, 1),
-            nn.ReLU(),
-            nn.MaxPool2d(2, 2),
-        )
-        self.classifier = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(32 * 56 * 56, 128),
-            nn.ReLU(),
-            nn.Linear(128, num_classes)
-        )
-    def forward(self, x):
-        x = self.features(x)
-        x = self.classifier(x)
-        return x
+nail_classifier = mobilenet_v2(weights=None)  # No pretrained weights
+nail_classifier.classifier[1] = nn.Linear(nail_classifier.last_channel, len(CLASS_NAMES))
+nail_classifier.load_state_dict(torch.load(NAIL_MODEL_PATH, map_location=DEVICE))
+nail_classifier = nail_classifier.to(DEVICE).eval()
 
-nail_classifier = SimpleCNN()
-nail_classifier.load_state_dict(torch.load(NAIL_ANEMIA_MODEL_PATH, map_location=DEVICE), strict=False)
-nail_classifier.to(DEVICE).eval()
-
+# ============================================================
+# TRANSFORMS
+# ============================================================
 nail_transform = transforms.Compose([
     transforms.Resize((224, 224)),
-    transforms.ToTensor()
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                         std=[0.229, 0.224, 0.225])
 ])
 
+# ============================================================
+# HELPERS
+# ============================================================
+def safe_float(x):
+    try:
+        return float(x)
+    except:
+        return 0.0
+
+def majority_label(labels):
+    """Return majority label among predictions."""
+    if not labels:
+        return "non-anemia"
+    return max(set(labels), key=labels.count)
+
+# ============================================================
+# MAIN FUNCTION
+# ============================================================
 def process_nail(image_path: str, save_dir: str):
     """
-    Returns:
-      {
-        "per_nail": [ {nail_id, path, det_conf, anemia_conf, anemia_pred}, ... up to 10 ],
-        "overall_prediction": "anemia" | "non-anemia",
-        "overall_confidence": float,
-        "success": bool
-      }
+    Detect nails, classify anemia, and return structured results.
     """
     try:
         image_pil = Image.open(image_path).convert("RGB")
         results = yolo_nail_model(image_pil)
+
         if len(results) == 0 or results[0].boxes is None or len(results[0].boxes) == 0:
-            return {"per_nail": [], "overall_prediction": "non-anemia", "overall_confidence": 0.0, "success": False}
+            return {
+                "per_nail": [],
+                "overall_prediction": "non-anemia",
+                "overall_confidence": 0.0,
+                "success": False
+            }
 
         boxes = results[0].boxes.xyxy.cpu().numpy()
         det_confs = results[0].boxes.conf.cpu().numpy() if results[0].boxes.conf is not None else np.zeros(len(boxes))
 
-        # Take top 10 by detection confidence
+        # Take top 10 nails by detection confidence
         order = np.argsort(det_confs)[::-1]
         boxes = boxes[order][:10]
         det_confs = det_confs[order][:10]
 
-        per_nail = []
-        anemia_preds = []
-        anemia_confs = []
+        per_nail, anemia_preds, anemia_confs = [], [], []
 
         for i, (box, det_c) in enumerate(zip(boxes, det_confs), start=1):
             x1, y1, x2, y2 = map(int, box)
             nail_crop = image_pil.crop((x1, y1, x2, y2))
 
-            # Save crop
+            # Save cropped nail
             cropped_path = os.path.join(save_dir, f"cropped_nail_{i}_{os.path.basename(image_path)}")
+            os.makedirs(save_dir, exist_ok=True)
             nail_crop.save(cropped_path)
 
-            # Classify
+            # Predict anemia with MobileNetV2
             tensor = nail_transform(nail_crop).unsqueeze(0).to(DEVICE)
             with torch.no_grad():
-                out = nail_classifier(tensor)
-                probs = torch.softmax(out, dim=1)
-                cls = int(torch.argmax(probs).item())
-                cls_conf = float(probs[0][cls].item())
+                outputs = nail_classifier(tensor)
+                probs = torch.softmax(outputs, dim=1)
+                conf, pred_class = torch.max(probs, 1)
 
-            pred_label = "anemic" if cls == 1 else "non_anemic"
+            predicted_label = CLASS_NAMES[pred_class.item()]
+            confidence = conf.item()
+
             per_nail.append({
                 "nail_id": i,
                 "path": cropped_path,
                 "det_conf": round(safe_float(det_c) * 100, 2),
-                "anemia_conf": round(cls_conf * 100, 2),
-                "anemia_pred": pred_label
+                "anemia_conf": round(confidence * 100, 2),
+                "anemia_pred": predicted_label
             })
-            anemia_preds.append("anemia" if cls == 1 else "non-anemia")
-            anemia_confs.append(cls_conf)
+
+            anemia_preds.append(predicted_label)
+            anemia_confs.append(confidence)
 
         overall_pred = majority_label(anemia_preds)
-        overall_conf = round((np.mean(anemia_confs) * 100) if anemia_confs else 0.0, 2)
+        overall_conf = round(np.mean(anemia_confs) * 100, 2) if anemia_confs else 0.0
 
         return {
             "per_nail": per_nail,
@@ -312,8 +328,15 @@ def process_nail(image_path: str, save_dir: str):
             "overall_confidence": overall_conf,
             "success": True
         }
+
     except Exception as e:
-        return {"per_nail": [], "overall_prediction": "non-anemia", "overall_confidence": 0.0, "success": False, "error": str(e)}
+        return {
+            "per_nail": [],
+            "overall_prediction": "non-anemia",
+            "overall_confidence": 0.0,
+            "success": False,
+            "error": str(e)
+        }
 
 # =========================
 # Flask Endpoint
@@ -371,21 +394,32 @@ def predict_anemia():
             palm_overall_pred = majority_label(palm_labels) if palm_labels else "not_processed"
             palm_overall_conf = round((np.mean(palm_conf_list) * 100) if palm_conf_list else 0.0, 2)
 
-            # Final combined (vote among eye_overall, palm_overall, nails_overall)
-            trio_labels = []
-            trio_confs = []
+            
+            # Final combined
+            trio_labels, weighted_scores = [], []
+
+            # Assign weights
+            eye_weight = 0.50
+            palm_weight = 0.25
+            nail_weight = 0.25
+
             if eye_overall_pred in ("anemia", "non-anemia"):
                 trio_labels.append(eye_overall_pred)
-                trio_confs.append(eye_overall_conf/100.0)
+                weighted_scores.append(eye_overall_conf/100.0 * eye_weight)
+
             if palm_overall_pred in ("anemia", "non-anemia"):
                 trio_labels.append(palm_overall_pred)
-                trio_confs.append(palm_overall_conf/100.0)
+                weighted_scores.append(palm_overall_conf/100.0 * palm_weight)
+
             if nails_res.get("success"):
                 trio_labels.append(nails_res["overall_prediction"])
-                trio_confs.append(safe_float(nails_res.get("overall_confidence", 0.0))/100.0)
+                weighted_scores.append(safe_float(nails_res.get("overall_confidence", 0.0))/100.0 * nail_weight)
 
+            # Final prediction uses majority vote among labels
             final_pred = majority_label(trio_labels) if trio_labels else "not_processed"
-            final_conf = round((np.mean(trio_confs) * 100) if trio_confs else 0.0, 2)
+            # Confidence is weighted sum instead of mean
+            final_conf = round(sum(weighted_scores) * 100 if weighted_scores else 0.0, 2)
+            
 
             # Build nail individual array for JSON (limit to 10 with nail_id 1..10)
             individual_nails = []
